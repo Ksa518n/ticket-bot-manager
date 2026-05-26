@@ -3,111 +3,93 @@ import {
   ChatInputCommandInteraction,
   PermissionFlagsBits,
   ChannelType,
-  EmbedBuilder,
-  ActionRowBuilder,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  TextChannel,
 } from "discord.js";
 import { TicketConfig } from "../models/TicketConfig.js";
 
 export const data = new SlashCommandBuilder()
   .setName("setup-ticket")
-  .setDescription("إعداد قسم تذاكر جديد (حد أقصى 5 أقسام)")
+  .setDescription("إضافة أو حذف قسم تذاكر (حد أقصى 5 أقسام)")
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addStringOption((option) =>
-    option
-      .setName("اسم_القسم")
-      .setDescription("اسم قسم التذكرة (مثال: الدعم الفني)")
-      .setRequired(true)
+  .addSubcommand((sub) =>
+    sub
+      .setName("اضافة")
+      .setDescription("إضافة قسم تذاكر جديد")
+      .addStringOption((opt) =>
+        opt.setName("اسم_القسم").setDescription("اسم قسم التذكرة").setRequired(true)
+      )
+      .addChannelOption((opt) =>
+        opt
+          .setName("الكاتجوري")
+          .setDescription("الكاتجوري التي ستُفتح فيها تذاكر هذا القسم")
+          .addChannelTypes(ChannelType.GuildCategory)
+          .setRequired(true)
+      )
   )
-  .addChannelOption((option) =>
-    option
-      .setName("الكاتجوري")
-      .setDescription("الكاتجوري (Category) التي ستفتح فيها تذاكر هذا القسم")
-      .addChannelTypes(ChannelType.GuildCategory)
-      .setRequired(true)
+  .addSubcommand((sub) =>
+    sub
+      .setName("حذف")
+      .setDescription("حذف قسم تذاكر موجود")
+      .addStringOption((opt) =>
+        opt.setName("اسم_القسم").setDescription("اسم القسم المراد حذفه").setRequired(true)
+      )
   )
-  .addChannelOption((option) =>
-    option
-      .setName("قناة_الإرسال")
-      .setDescription("القناة التي سيُرسل فيها زر فتح التذاكر")
-      .addChannelTypes(ChannelType.GuildText)
-      .setRequired(false)
+  .addSubcommand((sub) =>
+    sub.setName("عرض").setDescription("عرض الأقسام الحالية")
   );
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
 
   const guildId = interaction.guildId!;
-  const sectionName = interaction.options.getString("اسم_القسم", true);
-  const category = interaction.options.getChannel("الكاتجوري", true);
-  const sendChannel = interaction.options.getChannel("قناة_الإرسال") as TextChannel | null;
+  const sub = interaction.options.getSubcommand();
 
   let config = await TicketConfig.findOne({ guildId });
   if (!config) {
     config = new TicketConfig({ guildId, categories: [] });
   }
 
-  if (config.categories.length >= 5) {
+  if (sub === "اضافة") {
+    const name = interaction.options.getString("اسم_القسم", true);
+    const category = interaction.options.getChannel("الكاتجوري", true);
+
+    if (config.categories.length >= 5) {
+      await interaction.editReply({ content: "❌ وصلت للحد الأقصى (5 أقسام). احذف قسماً أولاً." });
+      return;
+    }
+    if (config.categories.find((c) => c.name === name)) {
+      await interaction.editReply({ content: `❌ القسم **${name}** موجود مسبقاً.` });
+      return;
+    }
+
+    config.categories.push({ name, categoryId: category.id });
+    await config.save();
     await interaction.editReply({
-      content: "❌ وصلت للحد الأقصى من الأقسام (5 أقسام). احذف قسماً قبل إضافة جديد.",
+      content: `✅ تم إضافة قسم **${name}** — الأقسام: **${config.categories.length}/5**\nاستخدم \`/ticket-panel\` لإرسال بانل التذاكر.`,
     });
     return;
   }
 
-  const exists = config.categories.find((c) => c.name === sectionName);
-  if (exists) {
-    await interaction.editReply({
-      content: `❌ القسم **${sectionName}** موجود مسبقاً.`,
-    });
+  if (sub === "حذف") {
+    const name = interaction.options.getString("اسم_القسم", true);
+    const idx = config.categories.findIndex((c) => c.name === name);
+    if (idx === -1) {
+      await interaction.editReply({ content: `❌ القسم **${name}** غير موجود.` });
+      return;
+    }
+    config.categories.splice(idx, 1);
+    await config.save();
+    await interaction.editReply({ content: `✅ تم حذف قسم **${name}** — الأقسام المتبقية: **${config.categories.length}/5**` });
     return;
   }
 
-  config.categories.push({ name: sectionName, categoryId: category.id });
-  await config.save();
-
-  const targetChannel = sendChannel ?? (interaction.channel as TextChannel);
-
-  const options = config.categories.map((cat) =>
-    new StringSelectMenuOptionBuilder()
-      .setLabel(cat.name)
-      .setValue(cat.name)
-      .setEmoji("🎫")
-  );
-
-  const selectMenu = new StringSelectMenuBuilder()
-    .setCustomId("ticket_category_select")
-    .setPlaceholder("اختر قسم التذكرة...")
-    .addOptions(options);
-
-  const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
-
-  const openButtonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("ticket_open_panel")
-      .setLabel("اضغط هنا لعرض أقسام التذاكر")
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji("➤")
-  );
-
-  const embed = new EmbedBuilder()
-    .setTitle("🎫 التذاكر")
-    .setDescription(
-      `**اختر القسم المناسب لك:**\n\n${config.categories.map((c) => `🎫 ${c.name}`).join("\n")}`
-    )
-    .setColor(0xe67e22)
-    .setFooter({ text: "نظام التذاكر" })
-    .setTimestamp();
-
-  await targetChannel.send({
-    embeds: [embed],
-    components: [row, openButtonRow],
-  });
-
-  await interaction.editReply({
-    content: `✅ تم إضافة قسم **${sectionName}** بنجاح! الأقسام الحالية: **${config.categories.length}/5**`,
-  });
+  if (sub === "عرض") {
+    if (config.categories.length === 0) {
+      await interaction.editReply({ content: "📂 لا توجد أقسام مضافة بعد." });
+      return;
+    }
+    await interaction.editReply({
+      content: `**📂 الأقسام الحالية (${config.categories.length}/5):**\n${config.categories.map((c, i) => `${i + 1}. **${c.name}** — <#${c.categoryId}>`).join("\n")}`,
+    });
+    return;
+  }
 }

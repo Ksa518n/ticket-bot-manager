@@ -1,7 +1,9 @@
 import * as setupTicket from "./setup.js";
-import * as ticketAdmin from "./ticket-admin.js";
+import * as panel from "./panel.js";
+import * as config from "./config.js";
 
 export const commands = [
   { data: setupTicket.data, execute: setupTicket.execute },
-  { data: ticketAdmin.data, execute: ticketAdmin.execute },
+  { data: panel.data, execute: panel.execute },
+  { data: config.data, execute: config.execute },
 ];

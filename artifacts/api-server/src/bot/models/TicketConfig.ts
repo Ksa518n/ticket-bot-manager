@@ -8,9 +8,9 @@ export interface ITicketCategory {
 export interface ITicketConfig extends Document {
   guildId: string;
   categories: ITicketCategory[];
-  ticketCounter: number;
+  welcomeMessage: string;
   logChannelId?: string;
-  staffRoleId?: string;
+  panelDescription?: string;
 }
 
 const TicketCategorySchema = new Schema<ITicketCategory>({
@@ -21,9 +21,12 @@ const TicketCategorySchema = new Schema<ITicketCategory>({
 const TicketConfigSchema = new Schema<ITicketConfig>({
   guildId: { type: String, required: true, unique: true },
   categories: { type: [TicketCategorySchema], default: [] },
-  ticketCounter: { type: Number, default: 1000 },
+  welcomeMessage: {
+    type: String,
+    default: "مرحباً {user}! تم فتح تذكرتك بنجاح.\nسيقوم أحد المشرفين بمساعدتك قريباً.",
+  },
   logChannelId: { type: String },
-  staffRoleId: { type: String },
+  panelDescription: { type: String, default: "اختر القسم المناسب لك من القائمة أدناه." },
 });
 
 export const TicketConfig = mongoose.model<ITicketConfig>("TicketConfig", TicketConfigSchema);
