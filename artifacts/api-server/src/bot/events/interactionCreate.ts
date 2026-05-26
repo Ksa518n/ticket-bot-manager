@@ -255,8 +255,11 @@ async function handleCategorySelect(interaction: StringSelectMenuInteraction): P
   const welcomeEmbed = new EmbedBuilder().setDescription(welcomeText).setColor(0x3498db);
   const actionRow = buildActionMenu(false);
 
+  const mentionParts: string[] = [`<@${interaction.user.id}>`];
+  if (config.staffRoleId) mentionParts.push(`<@&${config.staffRoleId}>`);
+
   await channel.send({
-    content: `<@${interaction.user.id}>`,
+    content: mentionParts.join(" "),
     embeds: [infoEmbed, welcomeEmbed],
     components: [actionRow],
   });
