@@ -2,6 +2,7 @@ import {
   Interaction,
   StringSelectMenuInteraction,
   ModalSubmitInteraction,
+  ButtonInteraction,
   EmbedBuilder,
   ActionRowBuilder,
   StringSelectMenuBuilder,
@@ -9,88 +10,108 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   PermissionFlagsBits,
   TextChannel,
   CategoryChannel,
   Colors,
+  Guild,
+  OverwriteResolvable,
 } from "discord.js";
-import { Ticket } from "../models/Ticket.js";
-import { TicketConfig } from "../models/TicketConfig.js";
+import { Ticket, ITicket } from "../models/Ticket.js";
+import { TicketConfig, ITicketConfig } from "../models/TicketConfig.js";
 import { TicketLog } from "../models/TicketLog.js";
 import { getNextTicketNumber } from "../models/Counter.js";
+import { generateTranscript } from "../lib/transcript.js";
 import { commands } from "../commands/index.js";
 import { logger } from "../../lib/logger.js";
 
-// ─── helpers ───────────────────────────────────────────────────────────────
+// ─── permission helpers ────────────────────────────────────────────────────
 
-function isAdmin(interaction: { memberPermissions: { has: (p: bigint) => boolean } | null }): boolean {
-  return interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ?? false;
+function isStaff(
+  interaction: { memberPermissions: { has: (p: bigint) => boolean } | null; member: unknown },
+  config: ITicketConfig
+): boolean {
+  const perms = interaction.memberPermissions;
+  if (!perms) return false;
+  if (perms.has(PermissionFlagsBits.Administrator)) return true;
+  if (config.staffRoleId) {
+    const member = interaction.member as { roles: { cache: Map<string, unknown> } } | null;
+    return member?.roles.cache.has(config.staffRoleId) ?? false;
+  }
+  return perms.has(PermissionFlagsBits.ManageChannels);
 }
 
-async function sendLog(
-  interaction: { client: import("discord.js").Client; guild: import("discord.js").Guild | null },
-  guildId: string,
-  embed: EmbedBuilder
-): Promise<void> {
+function isSeniorAdmin(
+  interaction: { memberPermissions: { has: (p: bigint) => boolean } | null; member: unknown },
+  config: ITicketConfig
+): boolean {
+  const perms = interaction.memberPermissions;
+  if (!perms) return false;
+  if (perms.has(PermissionFlagsBits.Administrator)) return true;
+  if (config.seniorAdminRoleId) {
+    const member = interaction.member as { roles: { cache: Map<string, unknown> } } | null;
+    return member?.roles.cache.has(config.seniorAdminRoleId) ?? false;
+  }
+  return false;
+}
+
+// ─── log helper ────────────────────────────────────────────────────────────
+
+async function sendLog(guild: Guild, config: ITicketConfig, embed: EmbedBuilder): Promise<void> {
   try {
-    const config = await TicketConfig.findOne({ guildId });
-    if (!config?.logChannelId) return;
-    const ch = interaction.guild?.channels.cache.get(config.logChannelId) as TextChannel | undefined;
+    if (!config.logChannelId) return;
+    const ch = guild.channels.cache.get(config.logChannelId) as TextChannel | undefined;
     await ch?.send({ embeds: [embed] });
   } catch { /* قناة اللوقات غير متاحة */ }
 }
 
-function buildActionMenu(isStaff: boolean): ActionRowBuilder<StringSelectMenuBuilder> {
-  const userOptions = [
+// ─── action menu builder ───────────────────────────────────────────────────
+
+function buildActionMenu(staffMode: boolean): ActionRowBuilder<StringSelectMenuBuilder> {
+  const opts = [
     new StringSelectMenuOptionBuilder()
-      .setLabel("إغلاق التذكرة")
-      .setValue("ticket_action:close")
-      .setDescription("إغلاق هذه التذكرة")
-      .setEmoji("🔒"),
+      .setLabel("إغلاق التذكرة").setValue("ta:close").setEmoji("🔒"),
   ];
 
-  const staffOptions = [
-    new StringSelectMenuOptionBuilder()
-      .setLabel("استلام التذكرة")
-      .setValue("ticket_action:claim")
-      .setDescription("استلام التذكرة كمشرف")
-      .setEmoji("✅"),
-    new StringSelectMenuOptionBuilder()
-      .setLabel("ترك التذكرة")
-      .setValue("ticket_action:unclaim")
-      .setDescription("ترك التذكرة لمشرف آخر")
-      .setEmoji("🚪"),
-    new StringSelectMenuOptionBuilder()
-      .setLabel("استدعاء صاحب التذكرة")
-      .setValue("ticket_action:summon")
-      .setDescription("إرسال رسالة خاصة لصاحب التذكرة")
-      .setEmoji("📢"),
-    new StringSelectMenuOptionBuilder()
-      .setLabel("تغيير اسم التذكرة")
-      .setValue("ticket_action:rename")
-      .setDescription("تغيير اسم قناة التذكرة")
-      .setEmoji("✏️"),
-  ];
+  if (staffMode) {
+    opts.push(
+      new StringSelectMenuOptionBuilder()
+        .setLabel("استلام التذكرة").setValue("ta:claim").setDescription("استلام التذكرة كمشرف").setEmoji("✅"),
+      new StringSelectMenuOptionBuilder()
+        .setLabel("ترك التذكرة").setValue("ta:unclaim").setDescription("ترك الاستلام لمشرف آخر").setEmoji("🚪"),
+      new StringSelectMenuOptionBuilder()
+        .setLabel("استدعاء صاحب التذكرة").setValue("ta:summon").setDescription("إرسال DM لصاحب التذكرة").setEmoji("📢"),
+      new StringSelectMenuOptionBuilder()
+        .setLabel("تغيير اسم التذكرة").setValue("ta:rename").setDescription("تغيير اسم القناة").setEmoji("✏️"),
+      new StringSelectMenuOptionBuilder()
+        .setLabel("ملاحظة داخلية").setValue("ta:note").setDescription("إضافة ملاحظة في اللوقات").setEmoji("📝"),
+    );
+  }
 
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId("ticket_action_menu")
-    .setPlaceholder("اختر إجراء...")
-    .addOptions(isStaff ? [...userOptions, ...staffOptions] : userOptions);
+  opts.push(
+    new StringSelectMenuOptionBuilder()
+      .setLabel("تحديث القائمة").setValue("ta:refresh").setDescription("إعادة تحميل القائمة").setEmoji("🔄"),
+  );
 
-  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("ticket_action_menu")
+      .setPlaceholder("اختر إجراء...")
+      .addOptions(opts)
+  );
 }
 
 // ─── main handler ──────────────────────────────────────────────────────────
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
-  // slash commands
   if (interaction.isChatInputCommand()) {
     const cmd = commands.find((c) => c.data.name === interaction.commandName);
     if (!cmd) return;
-    try {
-      await cmd.execute(interaction);
-    } catch (err) {
+    try { await cmd.execute(interaction); }
+    catch (err) {
       logger.error({ err }, "Slash command error");
       const msg = { content: "❌ حدث خطأ.", ephemeral: true };
       if (interaction.replied || interaction.deferred) await interaction.followUp(msg);
@@ -99,110 +120,117 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
     return;
   }
 
-  // select menus
   if (interaction.isStringSelectMenu()) {
     if (interaction.customId === "ticket_category_select") {
-      await handleCategorySelect(interaction);
-    } else if (interaction.customId === "ticket_action_menu") {
-      await handleTicketAction(interaction);
+      await handleCategorySelect(interaction); return;
     }
-    return;
+    if (interaction.customId === "ticket_action_menu") {
+      await handleTicketAction(interaction); return;
+    }
   }
 
-  // modals
+  if (interaction.isButton()) {
+    if (interaction.customId.startsWith("ticket_reopen:")) {
+      await handleReopen(interaction); return;
+    }
+  }
+
   if (interaction.isModalSubmit()) {
     if (interaction.customId.startsWith("modal_rename:")) {
-      await handleRenameModal(interaction);
+      await handleRenameModal(interaction); return;
     }
-    return;
+    if (interaction.customId.startsWith("modal_note:")) {
+      await handleNoteModal(interaction); return;
+    }
   }
 }
 
 // ─── open ticket ───────────────────────────────────────────────────────────
 
 async function handleCategorySelect(interaction: StringSelectMenuInteraction): Promise<void> {
-  await interaction.deferReply({ ephemeral: true });
+  const val = interaction.values[0];
 
-  const guildId = interaction.guildId!;
-  const selectedValue = interaction.values[0];
-  // value format: "open_ticket:اسم القسم" or plain name (legacy)
-  const selectedCategory = selectedValue.startsWith("open_ticket:")
-    ? selectedValue.slice("open_ticket:".length)
-    : selectedValue;
-
-  const config = await TicketConfig.findOne({ guildId });
-  if (!config) {
-    await interaction.editReply({ content: "❌ لا يوجد إعداد للتذاكر." });
+  // refresh
+  if (val === "panel_refresh") {
+    await interaction.update({
+      components: interaction.message.components,
+    });
     return;
+  }
+
+  const selectedCategory = val.startsWith("open_ticket:") ? val.slice("open_ticket:".length) : val;
+  const guildId = interaction.guildId!;
+  const config = await TicketConfig.findOne({ guildId });
+
+  if (!config) {
+    await interaction.reply({ content: "❌ لا يوجد إعداد للتذاكر.", ephemeral: true }); return;
+  }
+
+  // blacklist check
+  if (config.blacklistedUsers.includes(interaction.user.id)) {
+    await interaction.reply({ content: "🚫 أنت محظور من فتح التذاكر في هذا السيرفر.", ephemeral: true }); return;
   }
 
   const catConfig = config.categories.find((c) => c.name === selectedCategory);
   if (!catConfig) {
-    await interaction.editReply({ content: "❌ القسم غير موجود." });
-    return;
+    await interaction.reply({ content: "❌ القسم غير موجود.", ephemeral: true }); return;
   }
 
   const existing = await Ticket.findOne({ guildId, userId: interaction.user.id, status: "open" });
   if (existing) {
-    await interaction.editReply({ content: `❌ لديك تذكرة مفتوحة: <#${existing.channelId}>` });
-    return;
+    await interaction.reply({ content: `❌ لديك تذكرة مفتوحة بالفعل: <#${existing.channelId}>`, ephemeral: true }); return;
   }
+
+  await interaction.deferReply({ ephemeral: true });
 
   const ticketNumber = await getNextTicketNumber(guildId);
   const guild = interaction.guild!;
-  const category = guild.channels.cache.get(catConfig.categoryId) as CategoryChannel | undefined;
+  const parentCat = guild.channels.cache.get(catConfig.categoryId) as CategoryChannel | undefined;
+
+  const overwrites: OverwriteResolvable[] = [
+    { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+    {
+      id: interaction.user.id,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles],
+    },
+    {
+      id: interaction.client.user!.id,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory],
+    },
+  ];
+  if (config.staffRoleId) {
+    overwrites.push({ id: config.staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+  }
+  if (config.seniorAdminRoleId) {
+    overwrites.push({ id: config.seniorAdminRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+  }
 
   const channel = await guild.channels.create({
     name: `ticket-${ticketNumber}`,
     type: ChannelType.GuildText,
-    parent: category ?? null,
-    permissionOverwrites: [
-      { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
-      {
-        id: interaction.user.id,
-        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-      },
-      {
-        id: interaction.client.user!.id,
-        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory],
-      },
-    ],
+    parent: parentCat ?? null,
+    permissionOverwrites: overwrites,
   }) as TextChannel;
 
   const ticket = new Ticket({
-    ticketNumber,
-    channelId: channel.id,
-    guildId,
-    userId: interaction.user.id,
-    username: interaction.user.tag,
-    category: selectedCategory,
-    categoryId: catConfig.categoryId,
-    status: "open",
-    title: `تذكرة #${ticketNumber}`,
+    ticketNumber, channelId: channel.id, guildId,
+    userId: interaction.user.id, username: interaction.user.tag,
+    category: selectedCategory, categoryId: catConfig.categoryId,
+    status: "open", title: `تذكرة #${ticketNumber}`,
   });
   await ticket.save();
 
-  // save log entry
   const ticketLog = new TicketLog({
-    ticketNumber,
-    guildId,
-    channelId: channel.id,
-    userId: interaction.user.id,
-    username: interaction.user.tag,
-    category: selectedCategory,
-    openedAt: new Date(),
+    ticketNumber, guildId, channelId: channel.id,
+    userId: interaction.user.id, username: interaction.user.tag,
+    category: selectedCategory, openedAt: new Date(),
     logs: [{ action: "فتح التذكرة", by: interaction.user.tag, byId: interaction.user.id, at: new Date() }],
   });
   await ticketLog.save();
 
-  // welcome message
-  const welcomeText = config.welcomeMessage
-    .replace("{user}", `<@${interaction.user.id}>`)
-    .replace("{ticket}", `#${ticketNumber}`);
-
-  const staffCount = guild.members.cache.filter(
-    (m) => m.permissions.has(PermissionFlagsBits.ManageChannels) && !m.user.bot
-  ).size;
+  const staffCount = config.staffRoleId
+    ? guild.members.cache.filter((m) => m.roles.cache.has(config.staffRoleId!)).size
+    : guild.members.cache.filter((m) => m.permissions.has(PermissionFlagsBits.ManageChannels) && !m.user.bot).size;
 
   const infoEmbed = new EmbedBuilder()
     .setAuthor({ name: guild.name, iconURL: guild.iconURL() ?? undefined })
@@ -220,10 +248,11 @@ async function handleCategorySelect(interaction: StringSelectMenuInteraction): P
     .setFooter({ text: `${guild.name} TICKET` })
     .setTimestamp();
 
-  const welcomeEmbed = new EmbedBuilder()
-    .setDescription(welcomeText)
-    .setColor(0x3498db);
+  const welcomeText = config.welcomeMessage
+    .replace("{user}", `<@${interaction.user.id}>`)
+    .replace("{ticket}", `#${ticketNumber}`);
 
+  const welcomeEmbed = new EmbedBuilder().setDescription(welcomeText).setColor(0x3498db);
   const actionRow = buildActionMenu(false);
 
   await channel.send({
@@ -235,66 +264,71 @@ async function handleCategorySelect(interaction: StringSelectMenuInteraction): P
   // DM opener
   try {
     await interaction.user.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🎫 تم فتح تذكرتك")
-          .setDescription(
-            `تم فتح تذكرتك في **${guild.name}**\n**القسم:** ${selectedCategory}\n**رقم التذكرة:** #${ticketNumber}\n**الرابط:** <#${channel.id}>`
-          )
-          .setColor(Colors.Green)
-          .setTimestamp(),
-      ],
+      embeds: [new EmbedBuilder()
+        .setTitle("🎫 تم فتح تذكرتك")
+        .setDescription(`تم فتح تذكرتك في **${guild.name}**\n**القسم:** ${selectedCategory}\n**رقم التذكرة:** #${ticketNumber}\n**الرابط:** <#${channel.id}>`)
+        .setColor(Colors.Green).setTimestamp()],
     });
-  } catch { /* المستخدم أغلق الرسائل الخاصة */ }
+  } catch { /* DMs مغلقة */ }
 
-  // log channel
-  await sendLog(interaction, guildId, new EmbedBuilder()
-    .setTitle("📂 تذكرة جديدة")
+  await sendLog(guild, config, new EmbedBuilder()
+    .setTitle("📂 تذكرة جديدة فُتحت")
     .addFields(
       { name: "👤 الفاتح", value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
       { name: "📂 القسم", value: selectedCategory, inline: true },
       { name: "🔢 رقم التذكرة", value: `#${ticketNumber}`, inline: true },
       { name: "📌 القناة", value: `<#${channel.id}>`, inline: true },
     )
-    .setColor(Colors.Green)
-    .setTimestamp()
+    .setColor(Colors.Green).setTimestamp()
   );
 
   await interaction.editReply({ content: `✅ تم فتح تذكرتك: <#${channel.id}>` });
 }
 
-// ─── ticket actions (select menu) ──────────────────────────────────────────
+// ─── ticket action menu router ─────────────────────────────────────────────
 
 async function handleTicketAction(interaction: StringSelectMenuInteraction): Promise<void> {
   const action = interaction.values[0];
+  const guildId = interaction.guildId!;
+  const config = await TicketConfig.findOne({ guildId });
+  if (!config) { await interaction.reply({ content: "❌ خطأ في الإعداد.", ephemeral: true }); return; }
 
-  if (action === "ticket_action:close") {
-    await doCloseTicket(interaction);
-  } else if (action === "ticket_action:claim") {
-    await doClaimTicket(interaction);
-  } else if (action === "ticket_action:unclaim") {
-    await doUnclaimTicket(interaction);
-  } else if (action === "ticket_action:summon") {
-    await doSummonTicket(interaction);
-  } else if (action === "ticket_action:rename") {
-    await doRenameTicket(interaction);
+  if (action === "ta:refresh") {
+    const staff = isStaff(interaction, config);
+    await interaction.update({ components: [buildActionMenu(staff)] });
+    return;
+  }
+
+  const ticket = await Ticket.findOne({ channelId: interaction.channelId, status: "open" });
+
+  if (action === "ta:close") { await doClose(interaction, ticket, config); return; }
+
+  if (!isStaff(interaction, config)) {
+    await interaction.reply({ content: "❌ هذا الإجراء مخصص للمشرفين فقط.", ephemeral: true }); return;
+  }
+
+  if (!ticket) { await interaction.reply({ content: "❌ هذه القناة ليست تذكرة مفتوحة.", ephemeral: true }); return; }
+
+  switch (action) {
+    case "ta:claim":   await doClaim(interaction, ticket, config); break;
+    case "ta:unclaim": await doUnclaim(interaction, ticket, config); break;
+    case "ta:summon":  await doSummon(interaction, ticket, config); break;
+    case "ta:rename":  await doRename(interaction, ticket); break;
+    case "ta:note":    await doNote(interaction, ticket); break;
   }
 }
 
 // ─── close ─────────────────────────────────────────────────────────────────
 
-async function doCloseTicket(interaction: StringSelectMenuInteraction): Promise<void> {
-  const ticket = await Ticket.findOne({ channelId: interaction.channelId, status: "open" });
-  if (!ticket) {
-    await interaction.reply({ content: "❌ هذه التذكرة مغلقة بالفعل.", ephemeral: true });
-    return;
-  }
+async function doClose(
+  interaction: StringSelectMenuInteraction,
+  ticket: ITicket | null,
+  config: ITicketConfig
+): Promise<void> {
+  if (!ticket) { await interaction.reply({ content: "❌ هذه القناة ليست تذكرة مفتوحة.", ephemeral: true }); return; }
 
-  const canClose = interaction.user.id === ticket.userId || isAdmin(interaction);
-  if (!canClose) {
-    await interaction.reply({ content: "❌ ليس لديك صلاحية إغلاق هذه التذكرة.", ephemeral: true });
-    return;
-  }
+  const canClose = interaction.user.id === ticket.userId || isStaff(interaction, config);
+  if (!canClose) { await interaction.reply({ content: "❌ ليس لديك صلاحية الإغلاق.", ephemeral: true }); return; }
 
   await interaction.deferUpdate();
 
@@ -304,28 +338,42 @@ async function doCloseTicket(interaction: StringSelectMenuInteraction): Promise<
   await ticket.save();
 
   const channel = interaction.channel as TextChannel;
+  const guild = interaction.guild!;
 
   // fetch transcript
   const messages = await channel.messages.fetch({ limit: 100 });
-  const transcriptLines = messages
-    .reverse()
-    .map((m) => `[${new Date(m.createdTimestamp).toLocaleString("ar-SA")}] ${m.author.tag}: ${m.content || "[مرفق]"}`)
-    .filter((l) => !l.includes("[مرفق]") || true);
+  const html = generateTranscript(messages, ticket.ticketNumber, ticket.category, ticket.username, guild.name);
 
   // update log
   const ticketLog = await TicketLog.findOne({ channelId: channel.id });
   if (ticketLog) {
     ticketLog.closedAt = new Date();
     ticketLog.closedBy = interaction.user.tag;
-    ticketLog.transcript = transcriptLines;
+    ticketLog.transcript = messages.map((m) => `[${new Date(m.createdTimestamp).toLocaleString("ar-SA")}] ${m.author.tag}: ${m.content || "[embed/مرفق]"}`);
     ticketLog.logs.push({ action: "إغلاق التذكرة", by: interaction.user.tag, byId: interaction.user.id, at: new Date() });
     await ticketLog.save();
   }
 
-  const transcriptText = transcriptLines.length > 0
-    ? transcriptLines.slice(-50).join("\n")
-    : "لا توجد رسائل";
+  // rename channel to closed-XXXX
+  await channel.setName(`closed-${ticket.ticketNumber}`);
 
+  // update permissions: hide from opener, keep for senior admins & staff
+  const overwrites: OverwriteResolvable[] = [
+    { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+    { id: interaction.client.user!.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory] },
+  ];
+  if (config.staffRoleId) {
+    overwrites.push({ id: config.staffRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+  }
+  if (config.seniorAdminRoleId) {
+    overwrites.push({ id: config.seniorAdminRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+  }
+  // deny opener access
+  overwrites.push({ id: ticket.userId, deny: [PermissionFlagsBits.ViewChannel] });
+  await channel.permissionOverwrites.set(overwrites);
+
+  // send close embed with reopen button
   const closeEmbed = new EmbedBuilder()
     .setTitle("🔒 تم إغلاق التذكرة")
     .addFields(
@@ -333,182 +381,147 @@ async function doCloseTicket(interaction: StringSelectMenuInteraction): Promise<
       { name: "👤 الفاتح", value: `<@${ticket.userId}>`, inline: true },
       { name: "🔒 أُغلقت بواسطة", value: interaction.user.tag, inline: true },
       { name: "📂 القسم", value: ticket.category, inline: true },
-      { name: "🕐 تاريخ الإغلاق", value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true },
+      { name: "🕐 وقت الإغلاق", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
     )
-    .setColor(Colors.Red)
-    .setTimestamp();
+    .setColor(Colors.Red).setTimestamp();
 
-  await channel.send({ embeds: [closeEmbed] });
+  const reopenRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ticket_reopen:${ticket.ticketNumber}`)
+      .setLabel("🔓 إعادة فتح التذكرة")
+      .setStyle(ButtonStyle.Success)
+  );
 
-  // DM opener with transcript
+  await channel.send({ embeds: [closeEmbed], components: [reopenRow] });
+
+  // send HTML transcript to DM
   try {
     const opener = await interaction.client.users.fetch(ticket.userId);
-    const transcriptBuffer = Buffer.from(transcriptLines.join("\n"), "utf-8");
     await opener.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🔒 تم إغلاق تذكرتك")
-          .setDescription(
-            `تم إغلاق تذكرتك **#${ticket.ticketNumber}** في **${interaction.guild?.name}**\n**بواسطة:** ${interaction.user.tag}\n**القسم:** ${ticket.category}`
-          )
-          .setColor(Colors.Red)
-          .setTimestamp(),
-      ],
-      files: [{ attachment: transcriptBuffer, name: `transcript-${ticket.ticketNumber}.txt` }],
+      embeds: [new EmbedBuilder()
+        .setTitle("🔒 تم إغلاق تذكرتك")
+        .setDescription(`تم إغلاق تذكرتك **#${ticket.ticketNumber}** في **${guild.name}**\n**بواسطة:** ${interaction.user.tag}\n**القسم:** ${ticket.category}\n\n📎 مرفق سجل المحادثة كاملاً — افتحه في المتصفح.`)
+        .setColor(Colors.Red).setTimestamp()],
+      files: [{ attachment: html, name: `transcript-ticket-${ticket.ticketNumber}.html` }],
     });
-  } catch { /* لا يمكن إرسال DM */ }
+  } catch { /* DMs مغلقة */ }
 
-  // log channel
-  await sendLog(interaction, ticket.guildId, new EmbedBuilder()
+  // send HTML to log channel
+  await sendLog(guild, config, new EmbedBuilder()
     .setTitle("🔒 تذكرة مغلقة")
     .addFields(
       { name: "🔢 رقم التذكرة", value: `#${ticket.ticketNumber}`, inline: true },
       { name: "👤 الفاتح", value: `<@${ticket.userId}> (${ticket.username})`, inline: true },
-      { name: "🔒 أُغلقت بواسطة", value: `${interaction.user.tag}`, inline: true },
+      { name: "🔒 أُغلقت بواسطة", value: interaction.user.tag, inline: true },
       { name: "📂 القسم", value: ticket.category, inline: true },
-      { name: "📜 آخر الرسائل", value: `\`\`\`\n${transcriptText.slice(0, 900)}\n\`\`\`` },
     )
-    .setColor(Colors.Red)
-    .setTimestamp()
+    .setColor(Colors.Red).setTimestamp()
   );
 
-  setTimeout(async () => {
-    try { await channel.delete("إغلاق التذكرة"); } catch { /* محذوفة مسبقاً */ }
-  }, 5000);
+  try {
+    const logCh = config.logChannelId ? guild.channels.cache.get(config.logChannelId) as TextChannel | undefined : undefined;
+    await logCh?.send({ files: [{ attachment: html, name: `transcript-ticket-${ticket.ticketNumber}.html` }] });
+  } catch { /* log channel */ }
 }
 
 // ─── claim ─────────────────────────────────────────────────────────────────
 
-async function doClaimTicket(interaction: StringSelectMenuInteraction): Promise<void> {
-  if (!isAdmin(interaction)) {
-    await interaction.reply({ content: "❌ هذا الإجراء مخصص للمشرفين فقط.", ephemeral: true });
-    return;
-  }
-
-  const ticket = await Ticket.findOne({ channelId: interaction.channelId, status: "open" });
-  if (!ticket) {
-    await interaction.reply({ content: "❌ هذه القناة ليست تذكرة مفتوحة.", ephemeral: true });
-    return;
-  }
+async function doClaim(
+  interaction: StringSelectMenuInteraction,
+  ticket: ITicket,
+  config: ITicketConfig
+): Promise<void> {
   if (ticket.claimedBy) {
-    await interaction.reply({ content: `❌ هذه التذكرة مستلمة من قبل **${ticket.claimedByName}**.`, ephemeral: true });
-    return;
+    await interaction.reply({ content: `❌ التذكرة مستلمة من قبل **${ticket.claimedByName}**.`, ephemeral: true }); return;
   }
 
-  await interaction.deferUpdate();
+  await interaction.update({ components: [buildActionMenu(true)] });
 
   ticket.claimedBy = interaction.user.id;
   ticket.claimedByName = interaction.user.tag;
   await ticket.save();
 
-  // update log
   const ticketLog = await TicketLog.findOne({ channelId: interaction.channelId });
   if (ticketLog) {
     ticketLog.logs.push({ action: "استلام التذكرة", by: interaction.user.tag, byId: interaction.user.id, at: new Date() });
     await ticketLog.save();
   }
 
-  const embed = new EmbedBuilder()
-    .setDescription(`✅ <@${interaction.user.id}> استلم هذه التذكرة.`)
-    .setColor(Colors.Green)
-    .setTimestamp();
-
-  await (interaction.channel as TextChannel).send({ embeds: [embed] });
+  await (interaction.channel as TextChannel).send({
+    embeds: [new EmbedBuilder()
+      .setDescription(`✅ <@${interaction.user.id}> استلم هذه التذكرة.`)
+      .setColor(Colors.Green).setTimestamp()],
+  });
 
   try {
     const opener = await interaction.client.users.fetch(ticket.userId);
     await opener.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("✅ تم استلام تذكرتك")
-          .setDescription(`قام **${interaction.user.tag}** باستلام تذكرتك **#${ticket.ticketNumber}** وسيساعدك قريباً.`)
-          .setColor(Colors.Green)
-          .setTimestamp(),
-      ],
+      embeds: [new EmbedBuilder()
+        .setTitle("✅ تم استلام تذكرتك")
+        .setDescription(`قام **${interaction.user.tag}** باستلام تذكرتك **#${ticket.ticketNumber}** وسيساعدك قريباً.`)
+        .setColor(Colors.Green).setTimestamp()],
     });
-  } catch { /* لا يمكن إرسال DM */ }
+  } catch { /* DMs مغلقة */ }
 
-  await sendLog(interaction, ticket.guildId, new EmbedBuilder()
+  await sendLog(interaction.guild!, config, new EmbedBuilder()
     .setTitle("✅ استلام تذكرة")
     .addFields(
       { name: "🔢 رقم التذكرة", value: `#${ticket.ticketNumber}`, inline: true },
       { name: "🔧 المستلم", value: `${interaction.user.tag}`, inline: true },
       { name: "👤 الفاتح", value: `<@${ticket.userId}>`, inline: true },
     )
-    .setColor(Colors.Green)
-    .setTimestamp()
+    .setColor(Colors.Green).setTimestamp()
   );
 }
 
 // ─── unclaim ───────────────────────────────────────────────────────────────
 
-async function doUnclaimTicket(interaction: StringSelectMenuInteraction): Promise<void> {
-  if (!isAdmin(interaction)) {
-    await interaction.reply({ content: "❌ هذا الإجراء مخصص للمشرفين فقط.", ephemeral: true });
-    return;
-  }
-
-  const ticket = await Ticket.findOne({ channelId: interaction.channelId, status: "open" });
-  if (!ticket) {
-    await interaction.reply({ content: "❌ هذه القناة ليست تذكرة مفتوحة.", ephemeral: true });
-    return;
-  }
+async function doUnclaim(
+  interaction: StringSelectMenuInteraction,
+  ticket: ITicket,
+  config: ITicketConfig
+): Promise<void> {
   if (!ticket.claimedBy) {
-    await interaction.reply({ content: "❌ هذه التذكرة غير مستلمة من أحد.", ephemeral: true });
-    return;
-  }
-  if (ticket.claimedBy !== interaction.user.id && !isAdmin(interaction)) {
-    await interaction.reply({ content: "❌ لا يمكنك ترك تذكرة لم تستلمها.", ephemeral: true });
-    return;
+    await interaction.reply({ content: "❌ هذه التذكرة غير مستلمة.", ephemeral: true }); return;
   }
 
-  await interaction.deferUpdate();
+  await interaction.update({ components: [buildActionMenu(true)] });
 
-  const prevClaimer = ticket.claimedByName;
+  const prev = ticket.claimedByName;
   ticket.claimedBy = undefined;
   ticket.claimedByName = undefined;
   await ticket.save();
 
   const ticketLog = await TicketLog.findOne({ channelId: interaction.channelId });
   if (ticketLog) {
-    ticketLog.logs.push({ action: "ترك التذكرة", by: interaction.user.tag, byId: interaction.user.id, at: new Date(), detail: `ترك الاستلام من ${prevClaimer}` });
+    ticketLog.logs.push({ action: "ترك التذكرة", by: interaction.user.tag, byId: interaction.user.id, at: new Date(), detail: `ترك الاستلام، كان مستلماً من ${prev}` });
     await ticketLog.save();
   }
 
-  const embed = new EmbedBuilder()
-    .setDescription(`🚪 <@${interaction.user.id}> ترك هذه التذكرة — أصبحت متاحة للاستلام.`)
-    .setColor(Colors.Orange)
-    .setTimestamp();
+  await (interaction.channel as TextChannel).send({
+    embeds: [new EmbedBuilder()
+      .setDescription(`🚪 <@${interaction.user.id}> ترك هذه التذكرة — أصبحت متاحة للاستلام.`)
+      .setColor(Colors.Orange).setTimestamp()],
+  });
 
-  await (interaction.channel as TextChannel).send({ embeds: [embed] });
-
-  await sendLog(interaction, ticket.guildId, new EmbedBuilder()
+  await sendLog(interaction.guild!, config, new EmbedBuilder()
     .setTitle("🚪 ترك تذكرة")
     .addFields(
       { name: "🔢 رقم التذكرة", value: `#${ticket.ticketNumber}`, inline: true },
       { name: "🚪 التارك", value: `${interaction.user.tag}`, inline: true },
-      { name: "👤 الفاتح", value: `<@${ticket.userId}>`, inline: true },
     )
-    .setColor(Colors.Orange)
-    .setTimestamp()
+    .setColor(Colors.Orange).setTimestamp()
   );
 }
 
 // ─── summon ────────────────────────────────────────────────────────────────
 
-async function doSummonTicket(interaction: StringSelectMenuInteraction): Promise<void> {
-  if (!isAdmin(interaction)) {
-    await interaction.reply({ content: "❌ هذا الإجراء مخصص للمشرفين فقط.", ephemeral: true });
-    return;
-  }
-
-  const ticket = await Ticket.findOne({ channelId: interaction.channelId, status: "open" });
-  if (!ticket) {
-    await interaction.reply({ content: "❌ هذه القناة ليست تذكرة مفتوحة.", ephemeral: true });
-    return;
-  }
-
-  await interaction.deferUpdate();
+async function doSummon(
+  interaction: StringSelectMenuInteraction,
+  ticket: ITicket,
+  config: ITicketConfig
+): Promise<void> {
+  await interaction.update({ components: [buildActionMenu(true)] });
 
   const ticketLog = await TicketLog.findOne({ channelId: interaction.channelId });
   if (ticketLog) {
@@ -516,81 +529,63 @@ async function doSummonTicket(interaction: StringSelectMenuInteraction): Promise
     await ticketLog.save();
   }
 
-  const pingEmbed = new EmbedBuilder()
-    .setDescription(`📢 <@${ticket.userId}> تم استدعاؤك من قبل <@${interaction.user.id}> — رجاءً الرد في هذه التذكرة.`)
-    .setColor(Colors.Yellow)
-    .setTimestamp();
-
-  await (interaction.channel as TextChannel).send({ content: `<@${ticket.userId}>`, embeds: [pingEmbed] });
+  await (interaction.channel as TextChannel).send({
+    content: `<@${ticket.userId}>`,
+    embeds: [new EmbedBuilder()
+      .setDescription(`📢 <@${ticket.userId}> تم استدعاؤك من قبل <@${interaction.user.id}> — رجاءً الرد هنا.`)
+      .setColor(Colors.Yellow).setTimestamp()],
+  });
 
   try {
     const opener = await interaction.client.users.fetch(ticket.userId);
     await opener.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("📢 استدعاء — تذكرتك بحاجة لردّك")
-          .setDescription(
-            `قام **${interaction.user.tag}** باستدعائك في تذكرة **#${ticket.ticketNumber}**\n**القسم:** ${ticket.category}\n**الرابط:** <#${interaction.channelId}>`
-          )
-          .setColor(Colors.Yellow)
-          .setTimestamp(),
-      ],
+      embeds: [new EmbedBuilder()
+        .setTitle("📢 استدعاء — تذكرتك تحتاج ردّك")
+        .setDescription(`قام **${interaction.user.tag}** باستدعائك في تذكرة **#${ticket.ticketNumber}**\n**القسم:** ${ticket.category}\n**الرابط:** <#${interaction.channelId}>`)
+        .setColor(Colors.Yellow).setTimestamp()],
     });
-  } catch { /* لا يمكن إرسال DM */ }
+  } catch { /* DMs مغلقة */ }
 
-  await sendLog(interaction, ticket.guildId, new EmbedBuilder()
+  await sendLog(interaction.guild!, config, new EmbedBuilder()
     .setTitle("📢 استدعاء صاحب التذكرة")
     .addFields(
       { name: "🔢 رقم التذكرة", value: `#${ticket.ticketNumber}`, inline: true },
       { name: "📢 المستدعي", value: `${interaction.user.tag}`, inline: true },
       { name: "👤 الفاتح", value: `<@${ticket.userId}>`, inline: true },
     )
-    .setColor(Colors.Yellow)
-    .setTimestamp()
+    .setColor(Colors.Yellow).setTimestamp()
   );
 }
 
 // ─── rename (modal) ────────────────────────────────────────────────────────
 
-async function doRenameTicket(interaction: StringSelectMenuInteraction): Promise<void> {
-  if (!isAdmin(interaction)) {
-    await interaction.reply({ content: "❌ هذا الإجراء مخصص للمشرفين فقط.", ephemeral: true });
-    return;
-  }
-
-  const ticket = await Ticket.findOne({ channelId: interaction.channelId, status: "open" });
-  if (!ticket) {
-    await interaction.reply({ content: "❌ هذه القناة ليست تذكرة مفتوحة.", ephemeral: true });
-    return;
-  }
-
+async function doRename(interaction: StringSelectMenuInteraction, ticket: ITicket): Promise<void> {
   const modal = new ModalBuilder()
     .setCustomId(`modal_rename:${ticket.ticketNumber}`)
     .setTitle("تغيير اسم التذكرة");
 
-  const input = new TextInputBuilder()
-    .setCustomId("new_name")
-    .setLabel("الاسم الجديد للتذكرة")
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder("مثال: دعم-فني")
-    .setMaxLength(90)
-    .setRequired(true);
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("new_name")
+        .setLabel("الاسم الجديد")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("مثال: دعم-تقني")
+        .setMaxLength(80)
+        .setRequired(true)
+    )
+  );
 
-  modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
   await interaction.showModal(modal);
 }
 
 async function handleRenameModal(interaction: ModalSubmitInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
-
   const ticketNumber = parseInt(interaction.customId.split(":")[1]);
   const newName = interaction.fields.getTextInputValue("new_name").replace(/\s+/g, "-").toLowerCase();
   const ticket = await Ticket.findOne({ ticketNumber, guildId: interaction.guildId!, status: "open" });
 
-  if (!ticket) {
-    await interaction.editReply({ content: "❌ التذكرة غير موجودة." });
-    return;
-  }
+  if (!ticket) { await interaction.editReply({ content: "❌ التذكرة غير موجودة." }); return; }
 
   const channel = interaction.channel as TextChannel;
   const oldName = channel.name;
@@ -600,28 +595,162 @@ async function handleRenameModal(interaction: ModalSubmitInteraction): Promise<v
 
   const ticketLog = await TicketLog.findOne({ channelId: channel.id });
   if (ticketLog) {
-    ticketLog.logs.push({ action: "تغيير الاسم", by: interaction.user.tag, byId: interaction.user.id, at: new Date(), detail: `${oldName} ← ticket-${newName}` });
+    ticketLog.logs.push({ action: "تغيير الاسم", by: interaction.user.tag, byId: interaction.user.id, at: new Date(), detail: `${oldName} → ticket-${newName}` });
     await ticketLog.save();
   }
 
-  const embed = new EmbedBuilder()
-    .setDescription(`✏️ تم تغيير اسم التذكرة إلى **ticket-${newName}** بواسطة <@${interaction.user.id}>`)
-    .setColor(Colors.Blurple)
-    .setTimestamp();
+  await channel.send({
+    embeds: [new EmbedBuilder()
+      .setDescription(`✏️ تم تغيير اسم التذكرة إلى **ticket-${newName}** بواسطة <@${interaction.user.id}>`)
+      .setColor(Colors.Blurple).setTimestamp()],
+  });
 
-  await channel.send({ embeds: [embed] });
-
-  await sendLog(interaction, ticket.guildId, new EmbedBuilder()
-    .setTitle("✏️ تغيير اسم تذكرة")
-    .addFields(
-      { name: "🔢 رقم التذكرة", value: `#${ticket.ticketNumber}`, inline: true },
-      { name: "✏️ الاسم القديم", value: oldName, inline: true },
-      { name: "✅ الاسم الجديد", value: `ticket-${newName}`, inline: true },
-      { name: "👤 بواسطة", value: `${interaction.user.tag}`, inline: true },
-    )
-    .setColor(Colors.Blurple)
-    .setTimestamp()
-  );
+  const config = await TicketConfig.findOne({ guildId: interaction.guildId! });
+  if (config) {
+    await sendLog(interaction.guild!, config, new EmbedBuilder()
+      .setTitle("✏️ تغيير اسم تذكرة")
+      .addFields(
+        { name: "🔢 رقم التذكرة", value: `#${ticket.ticketNumber}`, inline: true },
+        { name: "الاسم القديم", value: oldName, inline: true },
+        { name: "الاسم الجديد", value: `ticket-${newName}`, inline: true },
+        { name: "👤 بواسطة", value: interaction.user.tag, inline: true },
+      )
+      .setColor(Colors.Blurple).setTimestamp()
+    );
+  }
 
   await interaction.editReply({ content: `✅ تم تغيير الاسم إلى **ticket-${newName}**` });
+}
+
+// ─── note (modal) ──────────────────────────────────────────────────────────
+
+async function doNote(interaction: StringSelectMenuInteraction, ticket: ITicket): Promise<void> {
+  const modal = new ModalBuilder()
+    .setCustomId(`modal_note:${ticket.ticketNumber}`)
+    .setTitle("إضافة ملاحظة داخلية");
+
+  modal.addComponents(
+    new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder()
+        .setCustomId("note_content")
+        .setLabel("الملاحظة (تُرسل للوقات فقط)")
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder("اكتب ملاحظتك هنا...")
+        .setMaxLength(1000)
+        .setRequired(true)
+    )
+  );
+
+  await interaction.showModal(modal);
+}
+
+async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+  const ticketNumber = parseInt(interaction.customId.split(":")[1]);
+  const note = interaction.fields.getTextInputValue("note_content");
+  const ticket = await Ticket.findOne({ ticketNumber, guildId: interaction.guildId! });
+
+  if (!ticket) { await interaction.editReply({ content: "❌ التذكرة غير موجودة." }); return; }
+
+  const ticketLog = await TicketLog.findOne({ channelId: ticket.channelId });
+  if (ticketLog) {
+    ticketLog.logs.push({ action: "ملاحظة داخلية", by: interaction.user.tag, byId: interaction.user.id, at: new Date(), detail: note });
+    await ticketLog.save();
+  }
+
+  const config = await TicketConfig.findOne({ guildId: interaction.guildId! });
+  if (config) {
+    await sendLog(interaction.guild!, config, new EmbedBuilder()
+      .setTitle("📝 ملاحظة داخلية")
+      .addFields(
+        { name: "🔢 رقم التذكرة", value: `#${ticketNumber}`, inline: true },
+        { name: "👤 بواسطة", value: interaction.user.tag, inline: true },
+        { name: "📝 الملاحظة", value: note },
+      )
+      .setColor(0x9b59b6).setTimestamp()
+    );
+  }
+
+  await interaction.editReply({ content: "✅ تم إرسال الملاحظة إلى اللوقات." });
+}
+
+// ─── reopen (button) ───────────────────────────────────────────────────────
+
+async function handleReopen(interaction: ButtonInteraction): Promise<void> {
+  const guildId = interaction.guildId!;
+  const config = await TicketConfig.findOne({ guildId });
+
+  if (!config || !isSeniorAdmin(interaction, config)) {
+    await interaction.reply({ content: "❌ إعادة الفتح مخصصة للإدارة العليا فقط.", ephemeral: true }); return;
+  }
+
+  const ticketNumber = parseInt(interaction.customId.split(":")[1]);
+  const ticket = await Ticket.findOne({ ticketNumber, guildId, status: "closed" });
+
+  if (!ticket) { await interaction.reply({ content: "❌ التذكرة غير موجودة أو مفتوحة بالفعل.", ephemeral: true }); return; }
+
+  await interaction.deferUpdate();
+
+  ticket.status = "open";
+  ticket.reopenedAt = new Date();
+  ticket.reopenedBy = interaction.user.tag;
+  ticket.claimedBy = undefined;
+  ticket.claimedByName = undefined;
+  await ticket.save();
+
+  const channel = interaction.channel as TextChannel;
+  const guild = interaction.guild!;
+
+  // restore channel name
+  await channel.setName(`ticket-${ticketNumber}`);
+
+  // restore opener's access
+  await channel.permissionOverwrites.edit(ticket.userId, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true,
+    AttachFiles: true,
+  });
+
+  const ticketLog = await TicketLog.findOne({ channelId: channel.id });
+  if (ticketLog) {
+    ticketLog.logs.push({ action: "إعادة فتح التذكرة", by: interaction.user.tag, byId: interaction.user.id, at: new Date() });
+    await ticketLog.save();
+  }
+
+  const actionRow = buildActionMenu(false);
+
+  await channel.send({
+    content: `<@${ticket.userId}>`,
+    embeds: [new EmbedBuilder()
+      .setTitle("🔓 تم إعادة فتح التذكرة")
+      .setDescription(`قام <@${interaction.user.id}> بإعادة فتح التذكرة **#${ticketNumber}**.`)
+      .addFields(
+        { name: "👤 الفاتح الأصلي", value: `<@${ticket.userId}>`, inline: true },
+        { name: "🔓 أُعيد فتحها بواسطة", value: interaction.user.tag, inline: true },
+      )
+      .setColor(Colors.Green).setTimestamp()],
+    components: [actionRow],
+  });
+
+  // DM opener
+  try {
+    const opener = await interaction.client.users.fetch(ticket.userId);
+    await opener.send({
+      embeds: [new EmbedBuilder()
+        .setTitle("🔓 تم إعادة فتح تذكرتك")
+        .setDescription(`قام **${interaction.user.tag}** بإعادة فتح تذكرتك **#${ticketNumber}** في **${guild.name}**\n**الرابط:** <#${channel.id}>`)
+        .setColor(Colors.Green).setTimestamp()],
+    });
+  } catch { /* DMs مغلقة */ }
+
+  await sendLog(guild, config, new EmbedBuilder()
+    .setTitle("🔓 إعادة فتح تذكرة")
+    .addFields(
+      { name: "🔢 رقم التذكرة", value: `#${ticketNumber}`, inline: true },
+      { name: "🔓 أُعيد فتحها بواسطة", value: `${interaction.user.tag}`, inline: true },
+      { name: "👤 الفاتح الأصلي", value: `<@${ticket.userId}>`, inline: true },
+    )
+    .setColor(Colors.Green).setTimestamp()
+  );
 }

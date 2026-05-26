@@ -11,6 +11,10 @@ export interface ITicketConfig extends Document {
   welcomeMessage: string;
   logChannelId?: string;
   panelDescription?: string;
+  panelTitle?: string;
+  staffRoleId?: string;
+  seniorAdminRoleId?: string;
+  blacklistedUsers: string[];
 }
 
 const TicketCategorySchema = new Schema<ITicketCategory>({
@@ -23,10 +27,14 @@ const TicketConfigSchema = new Schema<ITicketConfig>({
   categories: { type: [TicketCategorySchema], default: [] },
   welcomeMessage: {
     type: String,
-    default: "مرحباً {user}! تم فتح تذكرتك بنجاح.\nسيقوم أحد المشرفين بمساعدتك قريباً.",
+    default: "مرحباً {user} 👋\nتم فتح تذكرتك **{ticket}** بنجاح.\nسيقوم أحد المشرفين بمساعدتك قريباً، يرجى وصف مشكلتك.",
   },
   logChannelId: { type: String },
   panelDescription: { type: String, default: "اختر القسم المناسب لك من القائمة أدناه." },
+  panelTitle: { type: String, default: "🎫 التذاكر" },
+  staffRoleId: { type: String },
+  seniorAdminRoleId: { type: String },
+  blacklistedUsers: { type: [String], default: [] },
 });
 
 export const TicketConfig = mongoose.model<ITicketConfig>("TicketConfig", TicketConfigSchema);

@@ -23,10 +23,10 @@ export const data = new SlashCommandBuilder()
       .setRequired(true)
   )
   .addStringOption((opt) =>
-    opt
-      .setName("نص_البانل")
-      .setDescription("النص الذي يظهر في embed البانل")
-      .setRequired(false)
+    opt.setName("العنوان").setDescription("عنوان الـ embed").setRequired(false)
+  )
+  .addStringOption((opt) =>
+    opt.setName("الوصف").setDescription("وصف/نص الـ embed").setRequired(false)
   );
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -34,22 +34,20 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   const guildId = interaction.guildId!;
   const channel = interaction.options.getChannel("القناة", true) as TextChannel;
-  const customText = interaction.options.getString("نص_البانل");
+  const customTitle = interaction.options.getString("العنوان");
+  const customDesc = interaction.options.getString("الوصف");
 
   const config = await TicketConfig.findOne({ guildId });
 
   if (!config || config.categories.length === 0) {
-    await interaction.editReply({
-      content: "❌ لا توجد أقسام مضافة. استخدم `/setup-ticket` أولاً.",
-    });
+    await interaction.editReply({ content: "❌ لا توجد أقسام مضافة. استخدم `/setup-ticket اضافة` أولاً." });
     return;
   }
 
-  if (customText) {
-    config.panelDescription = customText;
-    await config.save();
-  }
+  if (customTitle) { config.panelTitle = customTitle; await config.save(); }
+  if (customDesc) { config.panelDescription = customDesc; await config.save(); }
 
+  const title = config.panelTitle ?? "🎫 التذاكر";
   const description = config.panelDescription ?? "اختر القسم المناسب لك من القائمة أدناه.";
 
   const options = config.categories.map((cat) =>
@@ -57,6 +55,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       .setLabel(cat.name)
       .setValue(`open_ticket:${cat.name}`)
       .setEmoji("🎫")
+  );
+
+  options.push(
+    new StringSelectMenuOptionBuilder()
+      .setLabel("تحديث")
+      .setValue("panel_refresh")
+      .setDescription("إعادة تحميل القائمة")
+      .setEmoji("🔄")
   );
 
   const selectMenu = new StringSelectMenuBuilder()
@@ -67,15 +73,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
 
   const embed = new EmbedBuilder()
-    .setTitle("🎫 التذاكر")
-    .setDescription(
-      `${description}\n\n${config.categories.map((c) => `🎫 **${c.name}**`).join("\n")}`
-    )
+    .setTitle(title)
+    .setDescription(`${description}\n\n${config.categories.map((c) => `🎫 **${c.name}**`).join("\n")}`)
     .setColor(0xe67e22)
-    .setFooter({ text: interaction.guild?.name ?? "نظام التذاكر" })
+    .setFooter({ text: interaction.guild?.name ?? "نظام التذاكر", iconURL: interaction.guild?.iconURL() ?? undefined })
     .setTimestamp();
 
   await channel.send({ embeds: [embed], components: [row] });
-
-  await interaction.editReply({ content: `✅ تم إرسال بانل التذاكر في <#${channel.id}>` });
+  await interaction.editReply({ content: `✅ تم إرسال البانل في <#${channel.id}>` });
 }

@@ -14,6 +14,8 @@ export interface ITicket extends Document {
   createdAt: Date;
   closedAt?: Date;
   closedBy?: string;
+  reopenedAt?: Date;
+  reopenedBy?: string;
   title: string;
 }
 
@@ -31,6 +33,8 @@ const TicketSchema = new Schema<ITicket>({
   createdAt: { type: Date, default: Date.now },
   closedAt: { type: Date },
   closedBy: { type: String },
+  reopenedAt: { type: Date },
+  reopenedBy: { type: String },
   title: { type: String, required: true },
 });
 
