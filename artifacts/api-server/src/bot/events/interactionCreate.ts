@@ -400,12 +400,25 @@ async function doClose(
   // send HTML transcript to DM
   try {
     const opener = await interaction.client.users.fetch(ticket.userId);
+    const dmEmbed = new EmbedBuilder()
+      .setTitle("تم حذف التذكرة")
+      .addFields(
+        { name: "🗑️ حذف بواسطة", value: `${ticket.closedBy ?? interaction.user.tag} - <@${interaction.user.id}>`, inline: false },
+        { name: "👤 صاحب التذكرة", value: `<@${ticket.userId}>`, inline: false },
+        { name: "🔧 مستلم التذكرة", value: ticket.claimedBy ? `<@${ticket.claimedBy}>` : "<@لا يوجد>", inline: false },
+        { name: "🕐 وقت فتحها", value: `<t:${Math.floor(ticket.createdAt.getTime() / 1000)}:F>`, inline: false },
+        { name: "🗑️ وقت حذفها", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
+        { name: "🏠 اسم التذكرة", value: `ticket-${ticket.ticketNumber}`, inline: false },
+        { name: "🏠 رقم التذكرة", value: `${ticket.ticketNumber}`, inline: false },
+        { name: "🗂️ نوع التذكرة", value: ticket.category, inline: false },
+      )
+      .setThumbnail(opener.displayAvatarURL())
+      .setColor(0xe91e63)
+      .setFooter({ text: `${guild.name}'s Tickets`, iconURL: guild.iconURL() ?? undefined })
+      .setTimestamp();
     await opener.send({
-      embeds: [new EmbedBuilder()
-        .setTitle("🔒 تم إغلاق تذكرتك")
-        .setDescription(`تم إغلاق تذكرتك **#${ticket.ticketNumber}** في **${guild.name}**\n**بواسطة:** ${interaction.user.tag}\n**القسم:** ${ticket.category}\n\n📎 مرفق سجل المحادثة كاملاً — افتحه في المتصفح.`)
-        .setColor(Colors.Red).setTimestamp()],
-      files: [{ attachment: html, name: `transcript-ticket-${ticket.ticketNumber}.html` }],
+      embeds: [dmEmbed],
+      files: [{ attachment: html, name: `ticket-${ticket.ticketNumber}.html` }],
     });
   } catch { /* DMs مغلقة */ }
 
@@ -541,12 +554,26 @@ async function doSummon(
 
   try {
     const opener = await interaction.client.users.fetch(ticket.userId);
-    await opener.send({
-      embeds: [new EmbedBuilder()
-        .setTitle("📢 استدعاء — تذكرتك تحتاج ردّك")
-        .setDescription(`قام **${interaction.user.tag}** باستدعائك في تذكرة **#${ticket.ticketNumber}**\n**القسم:** ${ticket.category}\n**الرابط:** <#${interaction.channelId}>`)
-        .setColor(Colors.Yellow).setTimestamp()],
-    });
+    const summonEmbed = new EmbedBuilder()
+      .setTitle("تم استدعاءك للتذكرة")
+      .addFields(
+        { name: "🖥️ السيرفر", value: interaction.guild!.name, inline: false },
+        { name: "🎫 التذكرة", value: `ticket-${ticket.ticketNumber}\naضغط على الزر بالأسفل لنقلك للتذكرة`, inline: false },
+      )
+      .setThumbnail(interaction.guild!.iconURL() ?? null)
+      .setColor(0xe91e63)
+      .setFooter({ text: `${interaction.guild!.name}'s Tickets`, iconURL: interaction.guild!.iconURL() ?? undefined })
+      .setTimestamp();
+
+    const linkRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setLabel("اضغط للدخول")
+        .setStyle(ButtonStyle.Link)
+        .setURL(`https://discord.com/channels/${interaction.guildId}/${interaction.channelId}`)
+        .setEmoji("🔗")
+    );
+
+    await opener.send({ embeds: [summonEmbed], components: [linkRow] });
   } catch { /* DMs مغلقة */ }
 
   await sendLog(interaction.guild!, config, new EmbedBuilder()
