@@ -256,7 +256,7 @@ async function handleCategorySelect(interaction: StringSelectMenuInteraction): P
     .replace("{ticket}", `#${ticketNumber}`);
 
   const welcomeEmbed = new EmbedBuilder().setDescription(welcomeText).setColor(0x3498db);
-  const actionRow = buildActionMenu(false);
+  const actionRow = buildActionMenu(true);
 
   const mentionParts: string[] = [`<@${interaction.user.id}>`];
   if (config.staffRoleId) mentionParts.push(`<@&${config.staffRoleId}>`);
@@ -530,11 +530,17 @@ async function doClaim(
     await interaction.reply({ content: `❌ التذكرة مستلمة من قبل **${ticket.claimedByName}**.`, ephemeral: true }); return;
   }
 
-  await interaction.update({ components: [buildActionMenu(true)] });
-
   ticket.claimedBy = interaction.user.id;
   ticket.claimedByName = interaction.user.tag;
   await ticket.save();
+
+  // update the info embed's "المستلم" field (index 5) to show claimer
+  const originalEmbeds = interaction.message.embeds;
+  const updatedInfoEmbed = EmbedBuilder.from(originalEmbeds[0])
+    .spliceFields(5, 1, { name: "🔧 المستلم", value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true });
+  const newEmbeds = [updatedInfoEmbed, ...(originalEmbeds[1] ? [EmbedBuilder.from(originalEmbeds[1])] : [])];
+
+  await interaction.update({ embeds: newEmbeds, components: [buildActionMenu(true)] });
 
   const ticketLog = await TicketLog.findOne({ channelId: interaction.channelId });
   if (ticketLog) {
@@ -827,7 +833,7 @@ async function handleReopen(interaction: ButtonInteraction): Promise<void> {
     await ticketLog.save();
   }
 
-  const actionRow = buildActionMenu(false);
+  const actionRow = buildActionMenu(true);
 
   await channel.send({
     content: `<@${ticket.userId}>`,
