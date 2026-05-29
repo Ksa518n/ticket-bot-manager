@@ -6,7 +6,11 @@ export async function handleReady(client: Client) {
   logger.info(`✅ البوت جاهز: ${client.user?.tag}`);
 
   const token = process.env["DISCORD_TOKEN"]!;
-  const clientId = process.env["DISCORD_CLIENT_ID"]!;
+  const clientId = client.user?.id;
+  if (!clientId) {
+    logger.error("❌ تعذر الحصول على ID البوت لتسجيل الأوامر");
+    return;
+  }
   const guildId = process.env["GUILD_ID"] ?? "1217664651895111770";
 
   const rest = new REST().setToken(token);
