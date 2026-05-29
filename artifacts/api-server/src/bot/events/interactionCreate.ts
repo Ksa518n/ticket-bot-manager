@@ -120,6 +120,18 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
     return;
   }
 
+  if (interaction.isAutocomplete()) {
+    const cmd = commands.find((c) => c.data.name === interaction.commandName);
+    if (!cmd || !("autocomplete" in cmd)) return;
+    try {
+      // @ts-ignore - we check for autocomplete existence above
+      await cmd.autocomplete(interaction);
+    } catch (err) {
+      logger.error({ err }, "Autocomplete error");
+    }
+    return;
+  }
+
   if (interaction.isStringSelectMenu()) {
     if (interaction.customId === "ticket_category_select") {
       await handleCategorySelect(interaction); return;

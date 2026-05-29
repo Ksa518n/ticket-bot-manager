@@ -3,6 +3,7 @@ import {
   ChatInputCommandInteraction,
   PermissionFlagsBits,
   ChannelType,
+  AutocompleteInteraction,
 } from "discord.js";
 import { TicketConfig } from "../models/TicketConfig.js";
 
@@ -33,12 +34,35 @@ export const data = new SlashCommandBuilder()
       .setName("حذف")
       .setDescription("حذف قسم تذاكر موجود")
       .addStringOption((opt) =>
-        opt.setName("اسم_القسم").setDescription("اسم القسم المراد حذفه").setRequired(true)
+        opt
+          .setName("اسم_القسم")
+          .setDescription("اسم القسم المراد حذفه")
+          .setRequired(true)
+          .setAutocomplete(true)
       )
   )
   .addSubcommand((sub) =>
     sub.setName("عرض").setDescription("عرض الأقسام الحالية")
   );
+
+export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+  const guildId = interaction.guildId!;
+  const focusedValue = interaction.options.getFocused();
+  const config = await TicketConfig.findOne({ guildId });
+
+  if (!config || config.categories.length === 0) {
+    await interaction.respond([]);
+    return;
+  }
+
+  const filtered = config.categories.filter((cat) =>
+    cat.name.toLowerCase().includes(focusedValue.toLowerCase())
+  );
+
+  await interaction.respond(
+    filtered.map((cat) => ({ name: cat.name, value: cat.name }))
+  );
+}
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
