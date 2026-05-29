@@ -139,6 +139,9 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
     if (interaction.customId === "ticket_action_menu") {
       await handleTicketAction(interaction); return;
     }
+    if (interaction.customId === "delete_ticket_category") {
+      await handleDeleteCategorySelect(interaction); return;
+    }
   }
 
   if (interaction.isButton()) {
@@ -301,6 +304,34 @@ async function handleCategorySelect(interaction: StringSelectMenuInteraction): P
   );
 
   await interaction.editReply({ content: `✅ تم فتح تذكرتك: <#${channel.id}>` });
+}
+
+// ─── delete category handler ───────────────────────────────────────────────
+
+async function handleDeleteCategorySelect(interaction: StringSelectMenuInteraction): Promise<void> {
+  await interaction.deferUpdate();
+  const guildId = interaction.guildId!;
+  const name = interaction.values[0];
+
+  const config = await TicketConfig.findOne({ guildId });
+  if (!config) {
+    await interaction.followUp({ content: "❌ خطأ: لم يتم العثور على الإعدادات.", ephemeral: true });
+    return;
+  }
+
+  const idx = config.categories.findIndex((c) => c.name === name);
+  if (idx === -1) {
+    await interaction.followUp({ content: `❌ القسم **${name}** غير موجود بالفعل.`, ephemeral: true });
+    return;
+  }
+
+  config.categories.splice(idx, 1);
+  await config.save();
+
+  await interaction.editReply({
+    content: `✅ تم حذف قسم **${name}** بنجاح — الأقسام المتبقية: **${config.categories.length}/5**`,
+    components: [],
+  });
 }
 
 // ─── ticket action menu router ─────────────────────────────────────────────

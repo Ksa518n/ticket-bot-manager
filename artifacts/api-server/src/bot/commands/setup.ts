@@ -4,6 +4,9 @@ import {
   PermissionFlagsBits,
   ChannelType,
   AutocompleteInteraction,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
 } from "discord.js";
 import { TicketConfig } from "../models/TicketConfig.js";
 
@@ -26,20 +29,13 @@ export const data = new SlashCommandBuilder()
           .setRequired(true)
       )
       .addStringOption((opt) =>
-        opt.setName("إيموجي").setDescription("الإيموجي الخاص بالقسم (اختياري)").setRequired(false)
+        opt.setName("إيموجي").setDescription("ضع الإيموجي هنا مباشرة (مثال: 🎫)").setRequired(false)
       )
   )
   .addSubcommand((sub) =>
     sub
       .setName("حذف")
       .setDescription("حذف قسم تذاكر موجود")
-      .addStringOption((opt) =>
-        opt
-          .setName("اسم_القسم")
-          .setDescription("اسم القسم المراد حذفه")
-          .setRequired(true)
-          .setAutocomplete(true)
-      )
   )
   .addSubcommand((sub) =>
     sub.setName("عرض").setDescription("عرض الأقسام الحالية")
@@ -78,7 +74,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   if (sub === "اضافة") {
     const name = interaction.options.getString("اسم_القسم", true);
     const category = interaction.options.getChannel("الكاتجوري", true);
-    const emoji = interaction.options.getString("إيموجي");
+    const emojiInput = interaction.options.getString("إيموجي");
 
     if (config.categories.length >= 5) {
       await interaction.editReply({ content: "❌ وصلت للحد الأقصى (5 أقسام). احذف قسماً أولاً." });
@@ -89,7 +85,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       return;
     }
 
-    config.categories.push({ name, categoryId: category.id, emoji: emoji ?? undefined });
+    // تنظيف الإيموجي: إذا كان إيموجي مخصص بتنسيق <:name:id> أو <a:name:id>، نستخرج فقط ما نحتاجه أو نتركه كما هو
+    // ديسكورد يتعامل مع الإيموجي العادي كـ string. 
+    const emoji = emojiInput?.trim() || undefined;
+
+    config.categories.push({ name, categoryId: category.id, emoji });
     await config.save();
     await interaction.editReply({
       content: `✅ تم إضافة قسم **${name}** ${emoji ? emoji : ""} — الأقسام: **${config.categories.length}/5**\nاستخدم \`/ticket-panel\` لإرسال بانل التذاكر.`,
@@ -98,15 +98,30 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   if (sub === "حذف") {
-    const name = interaction.options.getString("اسم_القسم", true);
-    const idx = config.categories.findIndex((c) => c.name === name);
-    if (idx === -1) {
-      await interaction.editReply({ content: `❌ القسم **${name}** غير موجود.` });
+    if (config.categories.length === 0) {
+      await interaction.editReply({ content: "❌ لا توجد أقسام لحذفها." });
       return;
     }
-    config.categories.splice(idx, 1);
-    await config.save();
-    await interaction.editReply({ content: `✅ تم حذف قسم **${name}** — الأقسام المتبقية: **${config.categories.length}/5**` });
+
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId("delete_ticket_category")
+      .setPlaceholder("اختر القسم الذي تريد حذفه...")
+      .addOptions(
+        config.categories.map((cat) => {
+          const option = new StringSelectMenuOptionBuilder()
+            .setLabel(cat.name)
+            .setValue(cat.name);
+          if (cat.emoji) option.setEmoji(cat.emoji);
+          return option;
+        })
+      );
+
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+
+    await interaction.editReply({
+      content: "🗑️ يرجى اختيار القسم المراد حذفه من القائمة أدناه:",
+      components: [row],
+    });
     return;
   }
 
