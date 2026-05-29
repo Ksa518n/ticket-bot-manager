@@ -24,6 +24,9 @@ export const data = new SlashCommandBuilder()
           .addChannelTypes(ChannelType.GuildCategory)
           .setRequired(true)
       )
+      .addStringOption((opt) =>
+        opt.setName("إيموجي").setDescription("الإيموجي الخاص بالقسم (اختياري)").setRequired(false)
+      )
   )
   .addSubcommand((sub) =>
     sub
@@ -51,6 +54,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   if (sub === "اضافة") {
     const name = interaction.options.getString("اسم_القسم", true);
     const category = interaction.options.getChannel("الكاتجوري", true);
+    const emoji = interaction.options.getString("إيموجي");
 
     if (config.categories.length >= 5) {
       await interaction.editReply({ content: "❌ وصلت للحد الأقصى (5 أقسام). احذف قسماً أولاً." });
@@ -61,10 +65,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       return;
     }
 
-    config.categories.push({ name, categoryId: category.id });
+    config.categories.push({ name, categoryId: category.id, emoji: emoji ?? undefined });
     await config.save();
     await interaction.editReply({
-      content: `✅ تم إضافة قسم **${name}** — الأقسام: **${config.categories.length}/5**\nاستخدم \`/ticket-panel\` لإرسال بانل التذاكر.`,
+      content: `✅ تم إضافة قسم **${name}** ${emoji ? emoji : ""} — الأقسام: **${config.categories.length}/5**\nاستخدم \`/ticket-panel\` لإرسال بانل التذاكر.`,
     });
     return;
   }
@@ -88,7 +92,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       return;
     }
     await interaction.editReply({
-      content: `**📂 الأقسام الحالية (${config.categories.length}/5):**\n${config.categories.map((c, i) => `${i + 1}. **${c.name}** — <#${c.categoryId}>`).join("\n")}`,
+      content: `**📂 الأقسام الحالية (${config.categories.length}/5):**\n${config.categories.map((c, i) => `${i + 1}. ${c.emoji ? c.emoji : "🎫"} **${c.name}** — <#${c.categoryId}>`).join("\n")}`,
     });
     return;
   }

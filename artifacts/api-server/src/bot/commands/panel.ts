@@ -50,12 +50,19 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const title = config.panelTitle ?? "🎫 التذاكر";
   const description = config.panelDescription ?? "اختر القسم المناسب لك من القائمة أدناه.";
 
-  const options = config.categories.map((cat) =>
-    new StringSelectMenuOptionBuilder()
+  const options = config.categories.map((cat) => {
+    const option = new StringSelectMenuOptionBuilder()
       .setLabel(cat.name)
-      .setValue(`open_ticket:${cat.name}`)
-      .setEmoji("🎫")
-  );
+      .setValue(`open_ticket:${cat.name}`);
+    
+    if (cat.emoji) {
+      option.setEmoji(cat.emoji);
+    } else {
+      option.setEmoji("🎫");
+    }
+    
+    return option;
+  });
 
   options.push(
     new StringSelectMenuOptionBuilder()
@@ -74,7 +81,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   const embed = new EmbedBuilder()
     .setTitle(title)
-    .setDescription(`${description}\n\n${config.categories.map((c) => `🎫 **${c.name}**`).join("\n")}`)
+    .setDescription(`${description}\n\n${config.categories.map((c) => `${c.emoji ? c.emoji : "🎫"} **${c.name}**`).join("\n")}`)
     .setColor(0xe67e22)
     .setFooter({ text: interaction.guild?.name ?? "نظام التذاكر", iconURL: interaction.guild?.iconURL() ?? undefined })
     .setTimestamp();

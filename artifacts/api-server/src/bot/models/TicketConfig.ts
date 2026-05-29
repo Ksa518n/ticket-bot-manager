@@ -3,6 +3,7 @@ import mongoose, { Schema, Document } from "mongoose";
 export interface ITicketCategory {
   name: string;
   categoryId: string;
+  emoji?: string;
 }
 
 export interface ITicketConfig extends Document {
@@ -20,6 +21,7 @@ export interface ITicketConfig extends Document {
 const TicketCategorySchema = new Schema<ITicketCategory>({
   name: { type: String, required: true },
   categoryId: { type: String, required: true },
+  emoji: { type: String },
 });
 
 const TicketConfigSchema = new Schema<ITicketConfig>({
