@@ -1,8 +1,13 @@
 import express, { type Express, type Request, type Response } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
-import router from "./routes";
-import { logger } from "./lib/logger";
+import path from "path";
+import { fileURLToPath } from "url";
+import router from "./routes/index.js";
+import { logger } from "./lib/logger.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app: Express = express();
 const startTime = Date.now();
@@ -25,10 +30,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Serve static files ───────────────────────────────────────────────────
-app.use(express.static("public"));
+const publicPath = path.join(__dirname, "public");
+app.use(express.static(publicPath));
 
 app.get("/", (_req: Request, res: Response) => {
-  res.sendFile("index.html", { root: "public" });
+  res.sendFile(path.join(publicPath, "index.html"));
 });
 
 app.use("/api", router);

@@ -4,9 +4,9 @@ services:
     runtime: node
     region: frankfurt
     plan: free
-    rootDir: artifacts/api-server
-    buildCommand: npm install -g pnpm && pnpm install --frozen-lockfile && pnpm run build
-    startCommand: pnpm run start
+    rootDir: .
+    buildCommand: pnpm install && pnpm --filter @workspace/api-server run build
+    startCommand: pnpm --filter @workspace/api-server run start
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
